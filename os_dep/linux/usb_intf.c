@@ -573,7 +573,12 @@ _func_enter_;
 				pdvobjpriv->RtOutPipe[pdvobjpriv->RtNumOutPipes] = RT_usb_endpoint_num(pendp_desc);
 				pdvobjpriv->RtNumOutPipes++;
 			}
-			pdvobjpriv->ep_num[i] = RT_usb_endpoint_num(pendp_desc);
+			// Prevent array index out of bounds (ep_num has 6 elements)
+			if (i < 6) {
+				pdvobjpriv->ep_num[i] = RT_usb_endpoint_num(pendp_desc);
+			} else {
+				DBG_871X("Warning: ep_num array index %d out of bounds (max 5)\n", i);
+			}
 		}
 	}
 
