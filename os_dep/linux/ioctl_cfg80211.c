@@ -468,17 +468,54 @@ exit:
 	
 }
 
+static void rtw_cfg80211_connect_result(_adapter *padapter,
+			const u8 *bssid,
+			const u8 *req_ie, size_t req_ie_len,
+			const u8 *resp_ie, size_t resp_ie_len,
+			u16 status, gfp_t gfp)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+	struct cfg80211_connect_resp_params connect_params = {0};
+	struct wireless_dev *pwdev = padapter->rtw_wdev;
+
+	connect_params.status = status;
+	connect_params.bssid = bssid;
+	connect_params.req_ie = req_ie;
+	connect_params.req_ie_len = req_ie_len;
+	connect_params.resp_ie = resp_ie;
+	connect_params.resp_ie_len = resp_ie_len;
+	
+	cfg80211_connect_resp(padapter->pnetdev, &connect_params);
+#else
+	/* Use the original API for older kernels */
+	cfg80211_connect_result(padapter->pnetdev, bssid,
+				req_ie, req_ie_len,
+				resp_ie, resp_ie_len,
+				status, gfp);
+#endif
+}
+
 void rtw_cfg80211_indicate_connect(_adapter *padapter)
 {
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
-	struct wlan_network  *cur_network = &(pmlmepriv->cur_network);
+	struct wlan_network *cur_network = &pmlmepriv->cur_network;
 	struct wireless_dev *pwdev = padapter->rtw_wdev;
-#ifdef CONFIG_P2P
-	struct wifidirect_info *pwdinfo= &(padapter->wdinfo);
-#endif
-
-
-	DBG_8192C("%s(padapter=%p)\n", __func__, padapter);
+	
+	DBG_871X(FUNC_ADPT_FMT"\n", FUNC_ADPT_ARG(padapter));
+	
+	#ifdef CONFIG_CONCURRENT_MODE
+	if(padapter->pbuddy_adapter && padapter->pbuddy_adapter->wdinfo.driver_interface == DRIVER_CFG80211 )
+	{
+		if(rtw_buddy_adapter_up(padapter))
+		{
+			rtw_cfg80211_indicate_scan_done(padapter->pbuddy_adapter, _FALSE);
+		}
+	}
+	else if(padapter->wdinfo.driver_interface == DRIVER_CFG80211)
+	#endif //CONFIG_CONCURRENT_MODE
+	{
+		rtw_cfg80211_indicate_scan_done(padapter, _FALSE);
+	}
 
 	if (pwdev->iftype != NL80211_IFTYPE_STATION
 		#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37)) || defined(COMPAT_KERNEL_RELEASE)
@@ -488,61 +525,53 @@ void rtw_cfg80211_indicate_connect(_adapter *padapter)
 		return;
 	}
 
-	if(check_fwstate(pmlmepriv, WIFI_AP_STATE) == _TRUE)
-		return;
-
-#ifdef CONFIG_P2P
-	if(pwdinfo->driver_interface == DRIVER_CFG80211 )
+	if(check_fwstate(pmlmepriv, WIFI_MONITOR_STATE) != _TRUE)
 	{
-		if(!rtw_p2p_chk_state(pwdinfo, P2P_STATE_NONE))
-		{
-			rtw_p2p_set_pre_state(pwdinfo, rtw_p2p_state(pwdinfo));
-			rtw_p2p_set_role(pwdinfo, P2P_ROLE_CLIENT);
-			rtw_p2p_set_state(pwdinfo, P2P_STATE_GONEGO_OK);
-			DBG_8192C("%s, role=%d, p2p_state=%d, pre_p2p_state=%d\n", __func__, rtw_p2p_role(pwdinfo), rtw_p2p_state(pwdinfo), rtw_p2p_pre_state(pwdinfo));
+		WLAN_BSSID_EX  *pnetwork = &(padapter->mlmeextpriv.mlmext_info.network);
+		struct wlan_network *scanned = pmlmepriv->cur_network_scanned;
+		
+		//DBG_871X(FUNC_ADPT_FMT" BSS not found"\n", FUNC_ADPT_ARG(padapter));
+
+		if(scanned == NULL) {
+			rtw_warn_on(1);
+			goto check_bss;
+		}
+
+		if (_rtw_memcmp(scanned->network.MacAddress, pnetwork->MacAddress, sizeof(pnetwork->MacAddress)) == _TRUE
+			&& _rtw_memcmp(&(scanned->network.Ssid), &(pnetwork->Ssid), sizeof(pnetwork->Ssid)) == _TRUE
+		) {
+			if(scanned->network.ie_length > 2)
+				rtw_cfg80211_connect_result(padapter,
+					cur_network->network.MacAddress,
+					pmlmepriv->assoc_req+sizeof(struct rtw_ieee80211_hdr_3addr)+2,
+					pmlmepriv->assoc_req_len-sizeof(struct rtw_ieee80211_hdr_3addr)-2,
+					pmlmepriv->assoc_rsp+sizeof(struct rtw_ieee80211_hdr_3addr)+6,
+					pmlmepriv->assoc_rsp_len-sizeof(struct rtw_ieee80211_hdr_3addr)-6,
+					WLAN_STATUS_SUCCESS, GFP_ATOMIC);
+		} else {
+			DBG_871X("scanned: %s("MAC_FMT"), cur: %s("MAC_FMT")\n",
+				scanned->network.Ssid.Ssid,
+				MAC_ARG(scanned->network.MacAddress),
+				pnetwork->Ssid.Ssid,
+				MAC_ARG(pnetwork->MacAddress)
+			);
+			rtw_cfg80211_connect_result(padapter,
+				pnetwork->MacAddress,
+				NULL, 0,
+				NULL, 0,
+				WLAN_STATUS_SUCCESS, GFP_ATOMIC);
 		}
 	}
-#endif //CONFIG_P2P
-
-	#ifdef CONFIG_LAYER2_ROAMING
-	if (rtw_to_roaming(padapter) > 0) {
-		#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39) || defined(COMPAT_KERNEL_RELEASE)
-		struct wiphy *wiphy = pwdev->wiphy;
-		struct ieee80211_channel *notify_channel;
-		u32 freq;
-		u16 channel = cur_network->network.Configuration.DSConfig;
-
-		if (channel <= RTW_CH_MAX_2G_CHANNEL)
-			freq = rtw_ieee80211_channel_to_frequency(channel, IEEE80211_BAND_2GHZ);
-		else
-			freq = rtw_ieee80211_channel_to_frequency(channel, IEEE80211_BAND_5GHZ);
-
-		notify_channel = ieee80211_get_channel(wiphy, freq);
-		#endif
-
-		DBG_871X("%s call cfg80211_roamed\n", __FUNCTION__);
-		cfg80211_roamed(padapter->pnetdev
-			#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39) || defined(COMPAT_KERNEL_RELEASE)
-			, notify_channel
-			#endif
-			, cur_network->network.MacAddress
-			, pmlmepriv->assoc_req+sizeof(struct rtw_ieee80211_hdr_3addr)+2
-			, pmlmepriv->assoc_req_len-sizeof(struct rtw_ieee80211_hdr_3addr)-2
-			, pmlmepriv->assoc_rsp+sizeof(struct rtw_ieee80211_hdr_3addr)+6
-			, pmlmepriv->assoc_rsp_len-sizeof(struct rtw_ieee80211_hdr_3addr)-6
-			, GFP_ATOMIC);
-	}
-	else 
-	#endif
+	else
 	{
-		DBG_8192C("pwdev->sme_state(b)=%d\n", pwdev->sme_state);
-		cfg80211_connect_result(padapter->pnetdev, cur_network->network.MacAddress
-			, pmlmepriv->assoc_req+sizeof(struct rtw_ieee80211_hdr_3addr)+2
-			, pmlmepriv->assoc_req_len-sizeof(struct rtw_ieee80211_hdr_3addr)-2
-			, pmlmepriv->assoc_rsp+sizeof(struct rtw_ieee80211_hdr_3addr)+6
-			, pmlmepriv->assoc_rsp_len-sizeof(struct rtw_ieee80211_hdr_3addr)-6
-			, WLAN_STATUS_SUCCESS, GFP_ATOMIC);
-		DBG_8192C("pwdev->sme_state(a)=%d\n", pwdev->sme_state);
+check_bss:
+		rtw_cfg80211_connect_result(padapter,
+			cur_network->network.MacAddress,
+			pmlmepriv->assoc_req+sizeof(struct rtw_ieee80211_hdr_3addr)+2,
+			pmlmepriv->assoc_req_len-sizeof(struct rtw_ieee80211_hdr_3addr)-2,
+			pmlmepriv->assoc_rsp+sizeof(struct rtw_ieee80211_hdr_3addr)+6,
+			pmlmepriv->assoc_rsp_len-sizeof(struct rtw_ieee80211_hdr_3addr)-6,
+			WLAN_STATUS_SUCCESS, GFP_ATOMIC);
 	}
 }
 
@@ -583,15 +612,26 @@ void rtw_cfg80211_indicate_disconnect(_adapter *padapter)
 		}
 	}
 #endif //CONFIG_P2P
-
 	if (!padapter->mlmepriv.not_indic_disco) {
 		DBG_8192C("pwdev->sme_state(b)=%d\n", pwdev->sme_state);
 
-		if(pwdev->sme_state==CFG80211_SME_CONNECTING)
+		if(pwdev->sme_state==CFG80211_SME_CONNECTING) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+			struct cfg80211_connect_resp_params connect_params = {0};
+			connect_params.status = WLAN_STATUS_UNSPECIFIED_FAILURE;
+			cfg80211_connect_resp(padapter->pnetdev, &connect_params);
+#else
 			cfg80211_connect_result(padapter->pnetdev, NULL, NULL, 0, NULL, 0, 
 				WLAN_STATUS_UNSPECIFIED_FAILURE, GFP_ATOMIC/*GFP_KERNEL*/);
-		else if(pwdev->sme_state==CFG80211_SME_CONNECTED)
+#endif
+		}
+		else if(pwdev->sme_state==CFG80211_SME_CONNECTED) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+			cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, true, GFP_ATOMIC);
+#else
 			cfg80211_disconnected(padapter->pnetdev, 0, NULL, 0, GFP_ATOMIC);
+#endif
+		}
 		//else
 			//DBG_8192C("pwdev->sme_state=%d\n", pwdev->sme_state);
 

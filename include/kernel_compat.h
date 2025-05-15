@@ -46,4 +46,21 @@
 #define IEEE80211_MAX_AMPDU_BUF 0xFF /* removed in kernel 6.0 */
 #endif
 
+/* Changes for kernel 6.8+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+/* Future-proofing for possible changes in 6.8 kernel */
+#define CONFIG_KERNEL_6_8 1
+
+/* Compatibility for netdevice changes */
+#ifndef NETIF_F_CSUM_MASK
+#define NETIF_F_CSUM_MASK (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM | NETIF_F_SCTP_CRC)
+#endif
+
+/* Add AFL_EXTENDED_DEBUGFS bit for skb flags if not present */
+#ifndef AFL_EXTENDED_DEBUGFS
+#define AFL_EXTENDED_DEBUGFS BIT(12)
+#endif
+
+#endif /* KERNEL_VERSION >= 6.8.0 */
+
 #endif /* __KERNEL_COMPAT_H__ */
