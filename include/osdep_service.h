@@ -38,6 +38,7 @@
 #endif
 
 #ifdef PLATFORM_LINUX
+#include <compat_linux.h>
 #include <osdep_service_linux.h>
 #endif
 

@@ -34,6 +34,7 @@
 #include <wlan_bssdef.h>
 #include <wifi.h>
 #include <ieee80211.h>
+#include <kernel_compat.h>
 
 
 #ifdef PLATFORM_OS_XP

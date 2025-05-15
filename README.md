@@ -1,5 +1,21 @@
 ## Changes
+2025-05-15: Updated to compile against kernel 6.1.21+
 2019-07-11: Updated to compile against kernel 5.2
+
+## Kernel 6.1.21+ Compatibility
+
+This driver has been updated to work with Linux kernel version 6.1.21 and newer. The following changes were made:
+- Added compatibility layer for memory barriers on newer AMD processors
+- Updated network driver select_queue API for 6.1+ kernels
+- Fixed IEEE80211_BAND to NL80211_BAND mapping for 6.1+ kernels
+- Added support for other kernel API changes
+
+### Simplified Build for Kernel 6.1+ 
+
+```sh
+$ ./build.sh
+$ sudo modprobe 8812au
+```
 
 ## Realtek 802.11ac (rtl8812au)
 
